@@ -116,13 +116,6 @@ func (m *DeniedHttpResponse) Validate() error {
 		return nil
 	}
 
-	if m.GetStatus() == nil {
-		return DeniedHttpResponseValidationError{
-			field:  "Status",
-			reason: "value is required",
-		}
-	}
-
 	if v, ok := interface{}(m.GetStatus()).(interface{ Validate() error }); ok {
 		if err := v.Validate(); err != nil {
 			return DeniedHttpResponseValidationError{
@@ -249,6 +242,21 @@ func (m *OkHttpResponse) Validate() error {
 			if err := v.Validate(); err != nil {
 				return OkHttpResponseValidationError{
 					field:  fmt.Sprintf("ResponseHeadersToAdd[%v]", idx),
+					reason: "embedded message failed validation",
+					cause:  err,
+				}
+			}
+		}
+
+	}
+
+	for idx, item := range m.GetQueryParametersToSet() {
+		_, _ = idx, item
+
+		if v, ok := interface{}(item).(interface{ Validate() error }); ok {
+			if err := v.Validate(); err != nil {
+				return OkHttpResponseValidationError{
+					field:  fmt.Sprintf("QueryParametersToSet[%v]", idx),
 					reason: "embedded message failed validation",
 					cause:  err,
 				}

@@ -19,11 +19,8 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/server/v3"
 )
 
-func (config *mockConfigWatcher) CreateDeltaWatch(req *discovery.DeltaDiscoveryRequest, state stream.StreamState) (chan cache.DeltaResponse, func()) {
+func (config *mockConfigWatcher) CreateDeltaWatch(req *discovery.DeltaDiscoveryRequest, state stream.StreamState, out chan cache.DeltaResponse) func() {
 	config.deltaCounts[req.TypeUrl] = config.deltaCounts[req.TypeUrl] + 1
-
-	// Create our out watch channel to return with a buffer of one
-	out := make(chan cache.DeltaResponse, 1)
 
 	if len(config.deltaResponses[req.TypeUrl]) > 0 {
 		res := config.deltaResponses[req.TypeUrl][0]
@@ -32,15 +29,15 @@ func (config *mockConfigWatcher) CreateDeltaWatch(req *discovery.DeltaDiscoveryR
 		r, _ := res.GetDeltaDiscoveryResponse()
 
 		switch {
-		case state.Wildcard:
+		case state.IsWildcard():
 			for _, resource := range r.Resources {
 				name := resource.GetName()
 				res, _ := cache.MarshalResource(resource)
 
 				nextVersion := cache.HashResource(res)
-				prevVersion, found := state.ResourceVersions[name]
+				prevVersion, found := state.GetResourceVersions()[name]
 				if !found || (prevVersion != nextVersion) {
-					state.ResourceVersions[name] = nextVersion
+					state.GetResourceVersions()[name] = nextVersion
 					subscribed = append(subscribed, resource)
 				}
 			}
@@ -48,11 +45,11 @@ func (config *mockConfigWatcher) CreateDeltaWatch(req *discovery.DeltaDiscoveryR
 			for _, resource := range r.Resources {
 				res, _ := cache.MarshalResource(resource)
 				nextVersion := cache.HashResource(res)
-				for _, prevVersion := range state.ResourceVersions {
+				for _, prevVersion := range state.GetResourceVersions() {
 					if prevVersion != nextVersion {
 						subscribed = append(subscribed, resource)
 					}
-					state.ResourceVersions[resource.GetName()] = nextVersion
+					state.GetResourceVersions()[resource.GetName()] = nextVersion
 				}
 			}
 		}
@@ -61,19 +58,16 @@ func (config *mockConfigWatcher) CreateDeltaWatch(req *discovery.DeltaDiscoveryR
 			DeltaRequest:      req,
 			Resources:         subscribed,
 			SystemVersionInfo: "",
-			NextVersionMap:    state.ResourceVersions,
+			NextVersionMap:    state.GetResourceVersions(),
 		}
-	} else if config.closeWatch {
-		close(out)
 	} else {
-		config.deltaWatches += 1
-		return out, func() {
-			close(out)
-			config.deltaWatches -= 1
+		config.deltaWatches++
+		return func() {
+			config.deltaWatches--
 		}
 	}
 
-	return out, nil
+	return nil
 }
 
 type mockDeltaStream struct {
@@ -158,31 +152,45 @@ func makeDeltaResponses() map[string][]cache.DeltaResponse {
 				SystemVersionInfo: "3",
 			},
 		},
+		rsrc.ScopedRouteType: {
+			&cache.RawDeltaResponse{
+				Resources:         []types.Resource{scopedRoute},
+				DeltaRequest:      &discovery.DeltaDiscoveryRequest{TypeUrl: rsrc.ScopedRouteType},
+				SystemVersionInfo: "4",
+			},
+		},
 		rsrc.ListenerType: {
 			&cache.RawDeltaResponse{
-				Resources:         []types.Resource{listener},
+				Resources:         []types.Resource{httpListener, httpScopedListener},
 				DeltaRequest:      &discovery.DeltaDiscoveryRequest{TypeUrl: rsrc.ListenerType},
-				SystemVersionInfo: "4",
+				SystemVersionInfo: "5",
 			},
 		},
 		rsrc.SecretType: {
 			&cache.RawDeltaResponse{
-				SystemVersionInfo: "5",
+				SystemVersionInfo: "6",
 				Resources:         []types.Resource{secret},
 				DeltaRequest:      &discovery.DeltaDiscoveryRequest{TypeUrl: rsrc.SecretType},
 			},
 		},
 		rsrc.RuntimeType: {
 			&cache.RawDeltaResponse{
-				SystemVersionInfo: "6",
+				SystemVersionInfo: "7",
 				Resources:         []types.Resource{runtime},
 				DeltaRequest:      &discovery.DeltaDiscoveryRequest{TypeUrl: rsrc.RuntimeType},
+			},
+		},
+		rsrc.ExtensionConfigType: {
+			&cache.RawDeltaResponse{
+				SystemVersionInfo: "8",
+				Resources:         []types.Resource{extensionConfig},
+				DeltaRequest:      &discovery.DeltaDiscoveryRequest{TypeUrl: rsrc.ExtensionConfigType},
 			},
 		},
 		// Pass-through type (types without explicit handling)
 		opaqueType: {
 			&cache.RawDeltaResponse{
-				SystemVersionInfo: "7",
+				SystemVersionInfo: "9",
 				Resources:         []types.Resource{opaque},
 				DeltaRequest:      &discovery.DeltaDiscoveryRequest{TypeUrl: opaqueType},
 			},
@@ -199,12 +207,16 @@ func process(typ string, resp *mockDeltaStream, s server.Server) error {
 		err = s.DeltaClusters(resp)
 	case rsrc.RouteType:
 		err = s.DeltaRoutes(resp)
+	case rsrc.ScopedRouteType:
+		err = s.DeltaScopedRoutes(resp)
 	case rsrc.ListenerType:
 		err = s.DeltaListeners(resp)
 	case rsrc.SecretType:
 		err = s.DeltaSecrets(resp)
 	case rsrc.RuntimeType:
 		err = s.DeltaRuntime(resp)
+	case rsrc.ExtensionConfigType:
+		err = s.DeltaExtensionConfigs(resp)
 	case opaqueType:
 		err = s.DeltaAggregatedResources(resp)
 	}
@@ -275,28 +287,6 @@ func TestDeltaResponseHandlers(t *testing.T) {
 	}
 }
 
-func TestDeltaWatchClosed(t *testing.T) {
-	for _, typ := range testTypes {
-		t.Run(typ, func(t *testing.T) {
-			config := makeMockConfigWatcher()
-			config.closeWatch = true
-			s := server.NewServer(context.Background(), config, server.CallbackFuncs{})
-
-			resp := makeMockDeltaStream(t)
-			resp.recv <- &discovery.DeltaDiscoveryRequest{
-				Node:    node,
-				TypeUrl: typ,
-			}
-
-			// Verify that the response fails when the watch is closed
-			err := s.DeltaAggregatedResources(resp)
-			assert.Error(t, err)
-
-			close(resp.recv)
-		})
-	}
-}
-
 func TestSendDeltaError(t *testing.T) {
 	for _, typ := range testTypes {
 		t.Run(typ, func(t *testing.T) {
@@ -345,6 +335,10 @@ func TestDeltaAggregatedHandlers(t *testing.T) {
 			ResourceNamesSubscribe: []string{routeName},
 		},
 		{
+			TypeUrl:                rsrc.ScopedRouteType,
+			ResourceNamesSubscribe: []string{scopedRouteName},
+		},
+		{
 			TypeUrl:                rsrc.SecretType,
 			ResourceNamesSubscribe: []string{secretName},
 		},
@@ -369,7 +363,13 @@ func TestDeltaAggregatedHandlers(t *testing.T) {
 				close(resp.recv)
 				assert.Equal(
 					t,
-					map[string]int{rsrc.EndpointType: 1, rsrc.ClusterType: 1, rsrc.RouteType: 1, rsrc.ListenerType: 1, rsrc.SecretType: 1},
+					map[string]int{
+						rsrc.EndpointType:    1,
+						rsrc.ClusterType:     1,
+						rsrc.RouteType:       1,
+						rsrc.ScopedRouteType: 1,
+						rsrc.ListenerType:    1,
+						rsrc.SecretType:      1},
 					config.deltaCounts,
 				)
 				return
@@ -405,7 +405,7 @@ func TestDeltaCancellations(t *testing.T) {
 		t.Errorf("DeltaAggregatedResources() => got %v, want no error", err)
 	}
 	if config.watches != 0 {
-		t.Errorf("Expect all watches cancelled, got %q", config.watches)
+		t.Errorf("Expect all watches canceled, got %q", config.watches)
 	}
 }
 
@@ -425,7 +425,7 @@ func TestDeltaOpaqueRequestsChannelMuxing(t *testing.T) {
 		t.Errorf("DeltaAggregatedResources() => got %v, want no error", err)
 	}
 	if config.watches != 0 {
-		t.Errorf("Expect all watches cancelled, got %q", config.watches)
+		t.Errorf("Expect all watches canceled, got %q", config.watches)
 	}
 }
 

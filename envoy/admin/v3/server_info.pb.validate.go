@@ -231,8 +231,6 @@ func (m *CommandLineOptions) Validate() error {
 
 	// no validation rules for CpusetThreads
 
-	// no validation rules for BootstrapVersion
-
 	// no validation rules for EnableFineGrainLogging
 
 	// no validation rules for SocketPath
@@ -240,10 +238,6 @@ func (m *CommandLineOptions) Validate() error {
 	// no validation rules for SocketMode
 
 	// no validation rules for EnableCoreDump
-
-	// no validation rules for HiddenEnvoyDeprecatedMaxStats
-
-	// no validation rules for HiddenEnvoyDeprecatedMaxObjNameLen
 
 	return nil
 }

@@ -41,7 +41,6 @@ type mockConfigWatcher struct {
 	deltaCounts    map[string]int
 	responses      map[string][]cache.Response
 	deltaResponses map[string][]cache.DeltaResponse
-	closeWatch     bool
 	watches        int
 	deltaWatches   int
 
@@ -54,9 +53,9 @@ func (config *mockConfigWatcher) CreateWatch(req *discovery.DiscoveryRequest, ou
 		out <- config.responses[req.TypeUrl][0]
 		config.responses[req.TypeUrl] = config.responses[req.TypeUrl][1:]
 	} else {
-		config.watches += 1
+		config.watches++
 		return func() {
-			config.watches -= 1
+			config.watches--
 		}
 	}
 	return nil
@@ -133,11 +132,14 @@ func makeMockStream(t *testing.T) *mockStream {
 }
 
 const (
-	clusterName  = "cluster0"
-	routeName    = "route0"
-	listenerName = "listener0"
-	secretName   = "secret0"
-	runtimeName  = "runtime0"
+	clusterName         = "cluster0"
+	routeName           = "route0"
+	scopedRouteName     = "scopedRoute0"
+	listenerName        = "listener0"
+	scopedListenerName  = "scopedListener0"
+	secretName          = "secret0"
+	runtimeName         = "runtime0"
+	extensionConfigName = "extensionConfig0"
 )
 
 var (
@@ -145,21 +147,26 @@ var (
 		Id:      "test-id",
 		Cluster: "test-cluster",
 	}
-	endpoint   = resource.MakeEndpoint(clusterName, 8080)
-	cluster    = resource.MakeCluster(resource.Ads, clusterName)
-	route      = resource.MakeRoute(routeName, clusterName)
-	listener   = resource.MakeHTTPListener(resource.Ads, listenerName, 80, routeName)
-	secret     = resource.MakeSecrets(secretName, "test")[0]
-	runtime    = resource.MakeRuntime(runtimeName)
-	opaque     = &core.Address{}
-	opaqueType = "unknown-type"
-	testTypes  = []string{
+	endpoint           = resource.MakeEndpoint(clusterName, 8080)
+	cluster            = resource.MakeCluster(resource.Ads, clusterName)
+	route              = resource.MakeRoute(routeName, clusterName)
+	scopedRoute        = resource.MakeScopedRoute(scopedRouteName, routeName, []string{"127.0.0.1"})
+	httpListener       = resource.MakeRouteHTTPListener(resource.Ads, listenerName, 80, routeName)
+	httpScopedListener = resource.MakeScopedRouteHTTPListener(resource.Ads, scopedListenerName, 80, scopedRouteName)
+	secret             = resource.MakeSecrets(secretName, "test")[0]
+	runtime            = resource.MakeRuntime(runtimeName)
+	extensionConfig    = resource.MakeExtensionConfig(resource.Ads, extensionConfigName, routeName)
+	opaque             = &core.Address{}
+	opaqueType         = "unknown-type"
+	testTypes          = []string{
 		rsrc.EndpointType,
 		rsrc.ClusterType,
 		rsrc.RouteType,
+		rsrc.ScopedRouteType,
 		rsrc.ListenerType,
 		rsrc.SecretType,
 		rsrc.RuntimeType,
+		rsrc.ExtensionConfigType,
 		opaqueType,
 	}
 )
@@ -169,50 +176,64 @@ func makeResponses() map[string][]cache.Response {
 		rsrc.EndpointType: {
 			&cache.RawResponse{
 				Version:   "1",
-				Resources: []types.ResourceWithTtl{{Resource: endpoint}},
+				Resources: []types.ResourceWithTTL{{Resource: endpoint}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.EndpointType},
 			},
 		},
 		rsrc.ClusterType: {
 			&cache.RawResponse{
 				Version:   "2",
-				Resources: []types.ResourceWithTtl{{Resource: cluster}},
+				Resources: []types.ResourceWithTTL{{Resource: cluster}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.ClusterType},
 			},
 		},
 		rsrc.RouteType: {
 			&cache.RawResponse{
 				Version:   "3",
-				Resources: []types.ResourceWithTtl{{Resource: route}},
+				Resources: []types.ResourceWithTTL{{Resource: route}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.RouteType},
+			},
+		},
+		rsrc.ScopedRouteType: {
+			&cache.RawResponse{
+				Version:   "4",
+				Resources: []types.ResourceWithTTL{{Resource: scopedRoute}},
+				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.ScopedRouteType},
 			},
 		},
 		rsrc.ListenerType: {
 			&cache.RawResponse{
-				Version:   "4",
-				Resources: []types.ResourceWithTtl{{Resource: listener}},
+				Version:   "5",
+				Resources: []types.ResourceWithTTL{{Resource: httpListener}, {Resource: httpScopedListener}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.ListenerType},
 			},
 		},
 		rsrc.SecretType: {
 			&cache.RawResponse{
-				Version:   "5",
-				Resources: []types.ResourceWithTtl{{Resource: secret}},
+				Version:   "6",
+				Resources: []types.ResourceWithTTL{{Resource: secret}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.SecretType},
 			},
 		},
 		rsrc.RuntimeType: {
 			&cache.RawResponse{
-				Version:   "6",
-				Resources: []types.ResourceWithTtl{{Resource: runtime}},
+				Version:   "7",
+				Resources: []types.ResourceWithTTL{{Resource: runtime}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.RuntimeType},
+			},
+		},
+		rsrc.ExtensionConfigType: {
+			&cache.RawResponse{
+				Version:   "8",
+				Resources: []types.ResourceWithTTL{{Resource: extensionConfig}},
+				Request:   &discovery.DiscoveryRequest{TypeUrl: rsrc.ExtensionConfigType},
 			},
 		},
 		// Pass-through type (xDS does not exist for this type)
 		opaqueType: {
 			&cache.RawResponse{
-				Version:   "7",
-				Resources: []types.ResourceWithTtl{{Resource: opaque}},
+				Version:   "9",
+				Resources: []types.ResourceWithTTL{{Resource: opaque}},
 				Request:   &discovery.DiscoveryRequest{TypeUrl: opaqueType},
 			},
 		},
@@ -240,12 +261,16 @@ func TestServerShutdown(t *testing.T) {
 					err = s.StreamClusters(resp)
 				case rsrc.RouteType:
 					err = s.StreamRoutes(resp)
+				case rsrc.ScopedRouteType:
+					err = s.StreamScopedRoutes(resp)
 				case rsrc.ListenerType:
 					err = s.StreamListeners(resp)
 				case rsrc.SecretType:
 					err = s.StreamSecrets(resp)
 				case rsrc.RuntimeType:
 					err = s.StreamRuntime(resp)
+				case rsrc.ExtensionConfigType:
+					err = s.StreamExtensionConfigs(resp)
 				case opaqueType:
 					err = s.StreamAggregatedResources(resp)
 				}
@@ -287,12 +312,16 @@ func TestResponseHandlers(t *testing.T) {
 					err = s.StreamClusters(resp)
 				case rsrc.RouteType:
 					err = s.StreamRoutes(resp)
+				case rsrc.ScopedRouteType:
+					err = s.StreamScopedRoutes(resp)
 				case rsrc.ListenerType:
 					err = s.StreamListeners(resp)
 				case rsrc.SecretType:
 					err = s.StreamSecrets(resp)
 				case rsrc.RuntimeType:
 					err = s.StreamRuntime(resp)
+				case rsrc.ExtensionConfigType:
+					err = s.StreamExtensionConfigs(resp)
 				case opaqueType:
 					err = s.StreamAggregatedResources(resp)
 				}
@@ -499,6 +528,10 @@ func TestAggregatedHandlers(t *testing.T) {
 		TypeUrl:       rsrc.RouteType,
 		ResourceNames: []string{routeName},
 	}
+	resp.recv <- &discovery.DiscoveryRequest{
+		TypeUrl:       rsrc.ScopedRouteType,
+		ResourceNames: []string{scopedRouteName},
+	}
 
 	s := server.NewServer(context.Background(), config, server.CallbackFuncs{})
 	go func() {
@@ -511,7 +544,7 @@ func TestAggregatedHandlers(t *testing.T) {
 		select {
 		case <-resp.sent:
 			count++
-			if count >= 4 {
+			if count >= 5 {
 				close(resp.recv)
 				assert.False(t, !reflect.DeepEqual(map[string]int{
 					rsrc.EndpointType: 1,

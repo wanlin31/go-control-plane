@@ -73,18 +73,6 @@ func (m *Filter) Validate() error {
 			}
 		}
 
-	case *Filter_HiddenEnvoyDeprecatedConfig:
-
-		if v, ok := interface{}(m.GetHiddenEnvoyDeprecatedConfig()).(interface{ Validate() error }); ok {
-			if err := v.Validate(); err != nil {
-				return FilterValidationError{
-					field:  "HiddenEnvoyDeprecatedConfig",
-					reason: "embedded message failed validation",
-					cause:  err,
-				}
-			}
-		}
-
 	}
 
 	return nil
@@ -188,6 +176,21 @@ func (m *FilterChainMatch) Validate() error {
 				cause:  err,
 			}
 		}
+	}
+
+	for idx, item := range m.GetDirectSourcePrefixRanges() {
+		_, _ = idx, item
+
+		if v, ok := interface{}(item).(interface{ Validate() error }); ok {
+			if err := v.Validate(); err != nil {
+				return FilterChainMatchValidationError{
+					field:  fmt.Sprintf("DirectSourcePrefixRanges[%v]", idx),
+					reason: "embedded message failed validation",
+					cause:  err,
+				}
+			}
+		}
+
 	}
 
 	if _, ok := FilterChainMatch_ConnectionSourceType_name[int32(m.GetSourceType())]; !ok {
@@ -362,16 +365,6 @@ func (m *FilterChain) Validate() error {
 		if err := v.Validate(); err != nil {
 			return FilterChainValidationError{
 				field:  "OnDemandConfiguration",
-				reason: "embedded message failed validation",
-				cause:  err,
-			}
-		}
-	}
-
-	if v, ok := interface{}(m.GetHiddenEnvoyDeprecatedTlsContext()).(interface{ Validate() error }); ok {
-		if err := v.Validate(); err != nil {
-			return FilterChainValidationError{
-				field:  "HiddenEnvoyDeprecatedTlsContext",
 				reason: "embedded message failed validation",
 				cause:  err,
 			}
@@ -603,18 +596,6 @@ func (m *ListenerFilter) Validate() error {
 			if err := v.Validate(); err != nil {
 				return ListenerFilterValidationError{
 					field:  "TypedConfig",
-					reason: "embedded message failed validation",
-					cause:  err,
-				}
-			}
-		}
-
-	case *ListenerFilter_HiddenEnvoyDeprecatedConfig:
-
-		if v, ok := interface{}(m.GetHiddenEnvoyDeprecatedConfig()).(interface{ Validate() error }); ok {
-			if err := v.Validate(); err != nil {
-				return ListenerFilterValidationError{
-					field:  "HiddenEnvoyDeprecatedConfig",
 					reason: "embedded message failed validation",
 					cause:  err,
 				}
