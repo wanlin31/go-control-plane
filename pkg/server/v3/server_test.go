@@ -529,6 +529,10 @@ func TestAggregatedHandlers(t *testing.T) {
 		ResourceNames: []string{routeName},
 	}
 	resp.recv <- &discovery.DiscoveryRequest{
+		TypeUrl:       rsrc.ExtensionConfigType,
+		ResourceNames: []string{extensionConfigName},
+	}
+	resp.recv <- &discovery.DiscoveryRequest{
 		TypeUrl:       rsrc.ScopedRouteType,
 		ResourceNames: []string{scopedRouteName},
 	}
@@ -544,13 +548,15 @@ func TestAggregatedHandlers(t *testing.T) {
 		select {
 		case <-resp.sent:
 			count++
-			if count >= 5 {
+			if count >= 6 {
 				close(resp.recv)
 				assert.False(t, !reflect.DeepEqual(map[string]int{
-					rsrc.EndpointType: 1,
-					rsrc.ClusterType:  1,
-					rsrc.RouteType:    1,
-					rsrc.ListenerType: 1,
+					rsrc.EndpointType:        1,
+					rsrc.ClusterType:         1,
+					rsrc.RouteType:           1,
+					rsrc.ListenerType:        1,
+					rsrc.ExtensionConfigType: 1,
+					rsrc.ScopedRouteType:     1,
 				}, config.counts))
 
 				// got all messages

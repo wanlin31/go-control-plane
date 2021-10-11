@@ -128,7 +128,7 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 				return status.Errorf(codes.Unavailable, typ+" watch failed")
 			}
 
-			nonce, err := send(resp, typ)
+			nonce, err := send(resp)
 			if err != nil {
 				return err
 			}
