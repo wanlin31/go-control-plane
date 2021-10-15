@@ -18,6 +18,7 @@ package sotw
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"sync/atomic"
 
@@ -113,34 +114,27 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 	// node may only be set on the first discovery request
 	var node = &core.Node{}
 
+	// recompute dynamic channels for this stream
+	watches.RecomputeWatches(s.ctx, reqCh)
+
 	for {
-		select {
-		case <-s.ctx.Done():
+		// The list of select cases looks like this:
+		// 0: <- ctx.Done
+		// 1: <- reqCh
+		// 2...: per type watches
+		index, value, ok := reflect.Select(watches.cases)
+		switch index {
+		// ctx.Done() -> if we receive a value here we return as no further computation is needed
+		case 0:
 			return nil
-		// config watcher can send the requested resources types in any order
-		case resp, more := <-watches.muxedResponses:
-			if !more {
-				break
-			}
-
-			typ := resp.GetRequest().GetTypeUrl()
-			if resp == errorResponse {
-				return status.Errorf(codes.Unavailable, typ+" watch failed")
-			}
-
-			nonce, err := send(resp)
-			if err != nil {
-				return err
-			}
-
-			watch := watches.watches[typ]
-			watch.nonce = nonce
-			watches.watches[typ] = watch
-		case req, more := <-reqCh:
+		// Case 1 handles any request inbound on the stream and handles all initialization as needed
+		case 1:
 			// input stream ended or errored out
-			if !more {
+			if !ok {
 				return nil
 			}
+
+			req := value.Interface().(*discovery.DiscoveryRequest)
 			if req == nil {
 				return status.Errorf(codes.Unavailable, "empty request")
 			}
@@ -151,6 +145,9 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 			} else {
 				req.Node = node
 			}
+
+			// nonces can be reused across streams; we verify nonce only if nonce is not initialized
+			nonce := req.GetResponseNonce()
 
 			// type URL is required for ADS but is implicit for xDS
 			if defaultTypeURL == resource.AnyType {
@@ -169,26 +166,42 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 
 			typeURL := req.GetTypeUrl()
 
-			// cancel existing watches to (re-)request a newer version
-			watch, ok := watches.watches[typeURL]
-			// nonces can be reused across streams; we verify nonce only if nonce is not initialized
-			if !ok || watch.nonce == req.GetResponseNonce() {
-				watch.Cancel()
+			w, ok := watches.responders[typeURL]
+			if !ok {
+				watches.responders[typeURL] = &watch{
+					selectCase: reflect.SelectCase{
+						Dir: reflect.SelectRecv,
+					},
+				}
 
-				watch.responses = make(chan cache.Response, 1)
-				watch.cancel = s.cache.CreateWatch(req, watch.responses)
-
-				watches.watches[typeURL] = watch
-				go func() {
-					resp, more := <-watch.responses
-					if !more {
-						watches.muxedResponses <- errorResponse
-						return
-					}
-
-					watches.muxedResponses <- resp
-				}()
+				w = watches.responders[typeURL]
+				watches.RecomputeWatches(stream.Context(), reqCh)
 			}
+			if w.nonce == "" || w.nonce == nonce {
+				if w.cancel != nil {
+					w.cancel()
+				}
+
+				responder := make(chan cache.Response, 1)
+				cancel := s.cache.CreateWatch(req, responder)
+				w.cancel = cancel
+				w.selectCase.Chan = reflect.ValueOf(responder)
+
+				watches.cases[w.index].Chan = reflect.ValueOf(responder)
+			}
+		default:
+			// Channel n -> these are the dynamic list of responders that correspond to the stream request typeURL
+			if !ok {
+				return status.Errorf(codes.Unavailable, "resource watch failed")
+			}
+
+			res := value.Interface().(cache.Response)
+			nonce, err := send(value.Interface().(cache.Response))
+			if err != nil {
+				return err
+			}
+
+			watches.responders[res.GetRequest().TypeUrl].nonce = nonce
 		}
 	}
 }
