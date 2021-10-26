@@ -81,7 +81,7 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 	// ignores stale nonces. nonce is only modified within send() function.
 	var streamNonce int64
 
-	streamState := streamv3.NewStreamState(false, map[string]string{})
+	streamState := stream.NewStreamState(false, map[string]string{})
 	lastDiscoveryResponses := map[string]lastDiscoveryResponse{}
 
 	// a collection of stack allocated watches per request type
@@ -114,7 +114,7 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 			resources: make(map[string]struct{}),
 		}
 		for _, r := range resp.GetRequest().ResourceNames {
-			lastResponse.resources[r] = struct{F{}
+			lastResponse.resources[r] = struct{}{}
 		}
 		lastDiscoveryResponses[resp.GetRequest().TypeUrl] = lastResponse
 
@@ -179,8 +179,8 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 					return err
 				}
 			}
-      
-      if lastResponse, ok := lastDiscoveryResponses[req.TypeUrl]; ok {
+
+			if lastResponse, ok := lastDiscoveryResponses[req.TypeUrl]; ok {
 				if lastResponse.nonce == "" || lastResponse.nonce == nonce {
 					// Let's record Resource names that a client has received.
 					streamState.SetKnownResourceNames(req.TypeUrl, lastResponse.resources)
