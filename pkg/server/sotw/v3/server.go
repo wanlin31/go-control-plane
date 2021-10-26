@@ -63,14 +63,26 @@ type server struct {
 	streamCount int64
 }
 
+// Discovery response that is sent over GRPC stream
+// We need to record what resource names are already sent to a client
+// So if the client requests a new name we can respond back
+// regardless current snapshot version (even if it is not changed yet)
+type lastDiscoveryResponse struct {
+	nonce     string
+	resources map[string]struct{}
+}
+
 // process handles a bi-di stream request
-func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.DiscoveryRequest, defaultTypeURL string) error {
+func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryRequest, defaultTypeURL string) error {
 	// increment stream count
 	streamID := atomic.AddInt64(&s.streamCount, 1)
 
 	// unique nonce generator for req-resp pairs per xDS stream; the server
 	// ignores stale nonces. nonce is only modified within send() function.
 	var streamNonce int64
+
+	streamState := streamv3.NewStreamState(false, map[string]string{})
+	lastDiscoveryResponses := map[string]lastDiscoveryResponse{}
 
 	// a collection of stack allocated watches per request type
 	watches := newWatches(reqCh)
@@ -96,14 +108,24 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 		// increment nonce
 		streamNonce = streamNonce + 1
 		out.Nonce = strconv.FormatInt(streamNonce, 10)
+
+		lastResponse := lastDiscoveryResponse{
+			nonce:     out.Nonce,
+			resources: make(map[string]struct{}),
+		}
+		for _, r := range resp.GetRequest().ResourceNames {
+			lastResponse.resources[r] = struct{F{}
+		}
+		lastDiscoveryResponses[resp.GetRequest().TypeUrl] = lastResponse
+
 		if s.callbacks != nil {
 			s.callbacks.OnStreamResponse(resp.GetContext(), streamID, resp.GetRequest(), out)
 		}
-		return out.Nonce, stream.Send(out)
+		return out.Nonce, str.Send(out)
 	}
 
 	if s.callbacks != nil {
-		if err := s.callbacks.OnStreamOpen(stream.Context(), streamID, defaultTypeURL); err != nil {
+		if err := s.callbacks.OnStreamOpen(str.Context(), streamID, defaultTypeURL); err != nil {
 			return err
 		}
 	}
@@ -157,6 +179,13 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 					return err
 				}
 			}
+      
+      if lastResponse, ok := lastDiscoveryResponses[req.TypeUrl]; ok {
+				if lastResponse.nonce == "" || lastResponse.nonce == nonce {
+					// Let's record Resource names that a client has received.
+					streamState.SetKnownResourceNames(req.TypeUrl, lastResponse.resources)
+				}
+			}
 
 			typeURL := req.GetTypeUrl()
 
@@ -169,7 +198,7 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 				}
 
 				w = watches.responders[typeURL]
-				watches.RecomputeWatches(stream.Context(), reqCh)
+				watches.RecomputeWatches(str.Context(), reqCh)
 			}
 			if w.nonce == "" || w.nonce == nonce {
 				if w.cancel != nil {
@@ -177,8 +206,7 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 				}
 
 				responder := make(chan cache.Response, 1)
-				cancel := s.cache.CreateWatch(req, responder)
-				w.cancel = cancel
+				w.cancel = s.cache.CreateWatch(req, streamState, responder)
 				w.selectCase.Chan = reflect.ValueOf(responder)
 
 				watches.cases[w.index].Chan = reflect.ValueOf(responder)
