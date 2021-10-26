@@ -63,9 +63,6 @@ type server struct {
 	streamCount int64
 }
 
-// Token response value used to signal a watch failure in muxed watches.
-var errorResponse = &cache.RawResponse{}
-
 // process handles a bi-di stream request
 func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.DiscoveryRequest, defaultTypeURL string) error {
 	// increment stream count
@@ -76,7 +73,7 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 	var streamNonce int64
 
 	// a collection of stack allocated watches per request type
-	watches := newWatches()
+	watches := newWatches(reqCh)
 
 	defer func() {
 		watches.Cancel()
@@ -113,9 +110,6 @@ func (s *server) process(stream stream.Stream, reqCh <-chan *discovery.Discovery
 
 	// node may only be set on the first discovery request
 	var node = &core.Node{}
-
-	// recompute dynamic channels for this stream
-	watches.RecomputeWatches(s.ctx, reqCh)
 
 	for {
 		// The list of select cases looks like this:
