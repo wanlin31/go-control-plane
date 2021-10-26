@@ -85,7 +85,7 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 	lastDiscoveryResponses := map[string]lastDiscoveryResponse{}
 
 	// a collection of stack allocated watches per request type
-	watches := newWatches(reqCh)
+	watches := newWatches()
 
 	defer func() {
 		watches.Cancel()
@@ -194,14 +194,10 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 
 			w, ok := watches.responders[typeURL]
 			if !ok {
-				watches.responders[typeURL] = &watch{
-					selectCase: reflect.SelectCase{
-						Dir: reflect.SelectRecv,
-					},
-				}
+				watches.responders[typeURL] = &watch{}
 
 				w = watches.responders[typeURL]
-				watches.RecomputeWatches(str.Context(), reqCh)
+				watches.RecomputeWatches(s.ctx, reqCh)
 			}
 			if w.nonce == "" || w.nonce == nonce {
 				if w.cancel != nil {
@@ -210,9 +206,10 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 
 				responder := make(chan cache.Response, 1)
 				w.cancel = s.cache.CreateWatch(req, streamState, responder)
-				w.selectCase.Chan = reflect.ValueOf(responder)
-
-				watches.cases[w.index].Chan = reflect.ValueOf(responder)
+				watches.cases[w.index] = reflect.SelectCase{
+					Dir:  reflect.SelectRecv,
+					Chan: reflect.ValueOf(responder),
+				}
 			}
 		default:
 			// Channel n -> these are the dynamic list of responders that correspond to the stream request typeURL

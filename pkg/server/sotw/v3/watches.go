@@ -17,10 +17,10 @@ type watches struct {
 }
 
 // newWatches creates and initializes watches.
-func newWatches(req <-chan *discovery.DiscoveryRequest) watches {
+func newWatches() watches {
 	return watches{
 		responders: make(map[string]*watch, int(types.UnknownType)),
-		cases:      make([]reflect.SelectCase, 2), // We use 2 for the default computation here: ctx.Done() + reqCh.Recv()
+		cases:      make([]reflect.SelectCase, 0),
 	}
 }
 
@@ -32,33 +32,32 @@ func (w *watches) Cancel() {
 }
 
 // recomputeWatches rebuilds the known list of dynamic channels if needed
-func (w *watches) RecomputeWatches(ctx context.Context, reqCh <-chan *discovery.DiscoveryRequest) {
-	newCases := []reflect.SelectCase{
+func (w *watches) RecomputeWatches(ctx context.Context, req <-chan *discovery.DiscoveryRequest) {
+	cases := []reflect.SelectCase{
 		{
 			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(ctx.Done()),
 		},
 		{
 			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(reqCh),
+			Chan: reflect.ValueOf(req),
 		},
 	}
 
-	index := len(newCases)
+	index := len(cases)
 	for _, watch := range w.responders {
-		newCases = append(newCases, watch.selectCase)
+		cases = append(cases, w.cases[watch.index])
 		watch.index = index
 		index++
 	}
 
-	w.cases = newCases
+	w.cases = cases
 }
 
 // watch contains the necessary modifiables for receiving resource responses
 type watch struct {
-	selectCase reflect.SelectCase
-	cancel     func()
-	nonce      string
+	cancel func()
+	nonce  string
 
 	// Index is used to track the location of this channel in watches. This allows us
 	// to update the channel used at this slot without recomputing the entire list of select
