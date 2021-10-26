@@ -18,13 +18,10 @@ type watches struct {
 
 // newWatches creates and initializes watches.
 func newWatches(req <-chan *discovery.DiscoveryRequest) watches {
-	w := watches{
+	return watches{
 		responders: make(map[string]*watch, int(types.UnknownType)),
+		cases:      make([]reflect.SelectCase, 2), // We use 2 for the default computation here: ctx.Done() + reqCh.Recv()
 	}
-
-	// Compute the initialize watch list
-	w.RecomputeWatches(context.Background(), req)
-	return w
 }
 
 // Cancel all watches

@@ -133,6 +133,9 @@ func (s *server) process(str stream.Stream, reqCh <-chan *discovery.DiscoveryReq
 	// node may only be set on the first discovery request
 	var node = &core.Node{}
 
+	// recompute dynamic channels for this stream
+	watches.RecomputeWatches(s.ctx, reqCh)
+
 	for {
 		// The list of select cases looks like this:
 		// 0: <- ctx.Done
