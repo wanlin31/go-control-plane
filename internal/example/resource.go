@@ -36,8 +36,8 @@ const (
 	RouteName    = "local_route"
 	ListenerName = "listener_0"
 	ListenerPort = 10000
-	UpstreamHost = "www.envoyproxy.io"
-	UpstreamPort = 80
+	UpstreamHost = "10.104.2.7"
+	UpstreamPort = 50051
 )
 
 func makeCluster(clusterName string) *cluster.Cluster {
@@ -48,6 +48,7 @@ func makeCluster(clusterName string) *cluster.Cluster {
 		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
 		LoadAssignment:       makeEndpoint(clusterName),
 		DnsLookupFamily:      cluster.Cluster_V4_ONLY,
+		Http2ProtocolOptions: &core.Http2ProtocolOptions{},
 	}
 }
 
