@@ -20,8 +20,8 @@ dynamic_resources:
     resource_api_version: V3
     ads: {}
 node:
-  cluster: test-cluster
-  id: test-id
+  cluster: test_cluster
+  id: test_id
 static_resources:
   clusters:
   - connect_timeout: 1s
